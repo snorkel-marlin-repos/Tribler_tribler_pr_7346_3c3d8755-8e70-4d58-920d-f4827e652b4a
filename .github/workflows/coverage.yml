@@ -1,0 +1,75 @@
+name: Coverage
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        default: 3.8
+        type: string
+        required: false
+
+      ref:
+        default: ${{ github.ref }}
+        type: string
+        required: false
+
+    secrets:
+      CODACY_PROJECT_TOKEN:
+        required: false
+      PYTEST_SENTRY_DSN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  generate_and_upload:
+    name: generate and upload
+    runs-on: ubuntu-latest
+
+    env:
+      PYTEST_SENTRY_DSN: ${{secrets.PYTEST_SENTRY_DSN}}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{inputs.ref}}
+
+      - name: Create python environment
+        uses: ./.github/actions/pyenv
+        with:
+          python-version: ${{inputs.python-version}}
+          requirements: requirements-test.txt
+          custom_cache_key_element: ${{inputs.ref}}
+
+      - name: Export env
+        uses: cardinalby/export-env-action@v2
+        with:
+          envFile: ./.github/workflows/vars/pytest.env
+          expand: true
+
+      - name: Add --looptime
+        if: runner.os != 'Windows'
+        run: |
+          echo "PYTEST_CORE_ARGUMENTS=${PYTEST_CORE_ARGUMENTS} --looptime" >> $GITHUB_ENV
+          echo "PYTEST_TUNNELS_ARGUMENTS=${PYTEST_TUNNELS_ARGUMENTS} --looptime" >> $GITHUB_ENV
+
+      - name: Run Pytest with Coverage
+        timeout-minutes: 10
+        run: |
+          coverage run --source=./src/tribler/core -p -m pytest ${PYTEST_CORE_ARGUMENTS}
+          coverage run --source=./src/tribler/core -p -m pytest ${PYTEST_TUNNELS_ARGUMENTS}
+          coverage combine
+          coverage xml
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+
+      - name: Upload to Codacy
+        if: github.event_name == 'push'
+        uses: codacy/codacy-coverage-reporter-action@v1
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: ./coverage.xml
